@@ -1,0 +1,107 @@
+/**
+ * Before running this script, make sure that the "calendars" variable below contain all relevant 
+ * calendars and "start" and "end" is set to the correct start and end date respectively (format: mm/dd/yyyy).
+ * Run this script by clicking Run > main.
+ **/
+function main() {
+  // list of calendars
+  var calendars = ["GDC StaffName1", "GDC StaffName2", "GDC StaffName3"]
+  // list of words (case insensitive) contained in an event title that should not be counted as a shift
+  var keywords = ["contracting"]
+  // start date
+  var start = "10/23/2016"
+  // end date
+  var end = "10/29/2016"
+  generateTimeSheetReport(start, end, calendars, keywords);
+}
+
+/**
+ * Constructs the time sheet report for a given period of time using the given list of GoogleCalendar names. Calendar events with "contracting" in the title does not get counted.
+ **/
+function generateTimeSheetReport(start, end, names, invalidwords) {
+  // Figure out the individual dates within the range
+  var sheet = SpreadsheetApp.getActiveSheet();
+  sheet.clear();
+  startarray = start.split("/");
+  startdate = new Date(+startarray[2], +startarray[0] - 1, +startarray[1]);
+  endarray = end.split("/");
+  enddate = new Date(+endarray[2], +endarray[0] - 1, +endarray[1] + 1);
+  var range = ((enddate-startdate)/(1000*60*60*24))
+  var rows = new Array();
+  
+  // Initialize title row, which has all the dates in the range
+  var firstrow = new Array();
+  firstrow.push("Name");
+  var curdate = new Date(startdate.getYear(), startdate.getMonth(), startdate.getDate());
+  for (var i = 0; i < range; i++) {
+    var thisdate = new Date(curdate.getYear(), curdate.getMonth(), curdate.getDate());
+    firstrow.push(thisdate);
+    curdate.setDate(curdate.getDate() + 1);
+  }
+  firstrow.push("Total");
+  rows.push(firstrow);
+  
+  // Calculate hours from each calendar
+  for (var a = 0; a < names.length; a++) {
+    var staff = CalendarApp.getCalendarsByName(names[a])[0];
+    var events = staff.getEvents(startdate, enddate);
+    var row = new Array();
+    row.push(names[a].split(" ")[1]); // NOTE: this assumes that the person's name is the second word in each calendar name
+    for (var x = 1; x < firstrow.length; x++) {
+      row.push(0);
+    }
+    var dates = new Array();
+    if (events.length > 0) {
+      for (var i = 0; i < events.length; i++) {
+        if (events[i].isAllDayEvent() == false) { // Filter out all day calendar events
+          var title = events[i].getTitle();
+          // Filter out calendar events with invalid words in the title
+          var isShift = true
+          for (var j = 0; j < invalidwords.length; j++) {
+            if (title.toLowerCase().indexOf(invalidwords[j].toLowerCase()) > -1) {
+              isShift = false
+              break
+            }
+          }
+          if (isShift) {
+            var shiftdate = [events[i].getStartTime(), events[i].getEndTime()];
+            for (var x = 0; x < dates.length; x++) {
+              // If this shift overlaps with any other previously seen shifts, adjust either the start or end time so that the overlapping time doesn't get double-counted
+              if (shiftdate[0].getYear() == dates[x][0].getYear() && shiftdate[0].getMonth() == dates[x][0].getMonth() && shiftdate[0].getDate() == dates[x][0].getDate()) {
+                if (shiftdate[0] >= dates[x][0] && shiftdate[1] <= dates[x][1]) {
+                  shiftdate = null;
+                }
+                else if (shiftdate[0] >= dates[x][0] && shiftdate[0] <= dates[x][1]) {
+                  shiftdate[0] = dates[x][1];
+                }
+                else if (shiftdate[1] >= dates[x][0] && shiftdate[1] <= dates[x][1]) {
+                  shiftdate[1] = dates[x][0];
+                }
+              }
+            }
+            if (shiftdate != null && shiftdate[1] > shiftdate[0]) {
+              for (var j = 1; j < firstrow.length - 1; j++) {
+                if (shiftdate[0].getDate() == firstrow[j].getDate() && shiftdate[0].getMonth() == firstrow[j].getMonth() && shiftdate[0].getYear() == firstrow[j].getYear()) {
+                  var duration = 0;
+                  if (shiftdate[1].getHours() < shiftdate[0].getHours()) { // If end date's hour is less than start date's hour, that means the end date is on the next day, so add 24 hours to it before subtracting start date
+                    duration = (shiftdate[1].getHours() + 24 + (shiftdate[1].getMinutes() / 60.0)).toFixed(2) - (shiftdate[0].getHours() + (shiftdate[0].getMinutes() / 60.0)).toFixed(2);
+                  } else {
+                    duration = (shiftdate[1].getHours() + (shiftdate[1].getMinutes() / 60.0)).toFixed(2) - (shiftdate[0].getHours() + (shiftdate[0].getMinutes() / 60.0)).toFixed(2);
+                  }
+                  row[j] += duration; // total for the day
+                  row[row.length - 1] += duration; // total for the range of dates
+                  dates.push(shiftdate);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    rows.push(row);
+  }
+  
+  // Put the array into the spreadsheet
+  sheet.getRange(1, 1, rows.length, rows[0].length).setValues(rows);
+  sheet.getRange(1, 2, 1, range + 1).setNumberFormat("ddd MM/dd");
+}
